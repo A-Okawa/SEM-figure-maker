@@ -332,13 +332,12 @@ def parse_jeol_txt(txt_content: str) -> dict:
 
 def extract_eds_maps_from_docx(docx_bytes: bytes) -> dict:
     """
-    Extract EDS elemental map images from an Oxford-format docx.
-    Returns only images matching the most common size (filters out
-    logos, full-report screenshots, etc.).
+    Extract images from an Oxford EDS docx.
+    Excludes tiny images (logos etc.) by minimum size threshold.
+    Returns all images with both dimensions >= 150px.
     key -> PIL Image (RGBA preserved)
     """
     import zipfile as _zf
-    from collections import Counter
     all_imgs = {}
     with _zf.ZipFile(io.BytesIO(docx_bytes)) as z:
         media = sorted([n for n in z.namelist()
@@ -347,15 +346,10 @@ def extract_eds_maps_from_docx(docx_bytes: bytes) -> dict:
         for mname in media:
             data = z.read(mname)
             img = Image.open(io.BytesIO(data))
-            all_imgs[mname] = img
-
-    if not all_imgs:
-        return {}
-
-    # Keep only images whose size matches the most common size
-    size_counts = Counter(img.size for img in all_imgs.values())
-    dominant_size = size_counts.most_common(1)[0][0]
-    return {k: v for k, v in all_imgs.items() if v.size == dominant_size}
+            w, h = img.size
+            if w >= 150 and h >= 150:   # exclude logos and tiny icons
+                all_imgs[mname] = img
+    return all_imgs
 
 
 def crop_eds_map(img: Image.Image) -> Image.Image:
@@ -443,9 +437,14 @@ tab2, tab_eds, tab3, tab1 = st.tabs([
 # ══════════════════════════════════════════════
 #  TAB EDS — EDS Map Processing
 # ══════════════════════════════════════════════
+if "eds_extracted" not in st.session_state:
+    st.session_state.eds_extracted = {}   # key -> PIL Image (RGBA)
+if "eds_ocr_cache" not in st.session_state:
+    st.session_state.eds_ocr_cache = {}   # key -> str
+
 with tab_eds:
     st.header("EDSマップ処理")
-    st.caption("OxfordのEDSレポート（.docx）をアップロード → 元素マップを自動抽出・処理してパネル配置に送ります")
+    st.caption("OxfordのEDSレポート（.docx）をアップロード → 元素マップを自動抽出・即パネル配置に追加")
 
     docx_files = st.file_uploader(
         "EDSレポート (.docx) をアップロード（複数可）",
@@ -455,8 +454,7 @@ with tab_eds:
     )
 
     if docx_files:
-        # 全docxからEDSマップを抽出（サイズでフィルタ済み）
-        extracted = {}   # display_key -> PIL Image (RGBA)
+        # 新しいdocxのみ処理（既に抽出済みはスキップ）
         for df in docx_files:
             stem = Path(df.name).stem
             df_bytes = df.read()
@@ -465,78 +463,65 @@ with tab_eds:
                 for i, (mname, img) in enumerate(maps.items()):
                     ext = Path(mname).suffix
                     key = f"{stem}_map{i+1}{ext}"
-                    extracted[key] = img
+                    if key not in st.session_state.eds_extracted:
+                        st.session_state.eds_extracted[key] = img
+                        # OCR を即時実行してキャッシュ
+                        st.session_state.eds_ocr_cache[key] = ocr_eds_element_name(img)
+                        # クロップ済み画像をパネル配置に即追加
+                        cropped = crop_eds_map(img)
+                        st.session_state.images[key] = cropped
             except Exception as e:
                 st.warning(f"{df.name}: 読み込みエラー ({e})")
 
-        if extracted:
-            n_maps = len(extracted)
-            st.success(f"{n_maps} 枚のEDSマップを抽出しました（ロゴ・レポート画像は自動除外）")
-            st.divider()
+    if st.session_state.eds_extracted:
+        n_maps = len(st.session_state.eds_extracted)
+        st.success(f"{n_maps} 枚を抽出済み（パネル配置に自動追加済み）")
 
-            # ── 共通設定 ─────────────────────────────
-            with st.expander("処理設定", expanded=True):
-                eds_label_fs = st.slider("元素ラベル フォントサイズ", 8, 60, 22, key="eds_lfs")
-                eds_label_color = st.selectbox("元素ラベル 色", ["white", "black", "yellow"], key="eds_lcol")
+        if st.button("EDS画像をクリア", key="eds_clear"):
+            for k in list(st.session_state.eds_extracted.keys()):
+                st.session_state.images.pop(k, None)
+            st.session_state.eds_extracted = {}
+            st.session_state.eds_ocr_cache = {}
+            st.rerun()
 
-            st.subheader("各マップの設定")
-            st.caption("元素名を確認・編集し、使用する画像を選択してください")
+        st.divider()
 
-            # ヘッダー
-            hc = st.columns([2, 2, 2, 1])
-            hc[0].caption("プレビュー（処理前）")
-            hc[1].caption("元素名（左上に表示）")
-            hc[2].caption("保存名")
-            hc[3].caption("使用")
+        # ── 共通設定 ─────────────────────────────
+        with st.expander("ラベル設定"):
+            eds_label_fs    = st.slider("元素ラベル フォントサイズ", 8, 60, 22, key="eds_lfs")
+            eds_label_color = st.selectbox("元素ラベル 色", ["white", "black", "yellow"], key="eds_lcol")
 
-            eds_entries = []
-            keys_list = list(extracted.items())
-            for i, (key, img_rgba) in enumerate(keys_list):
-                # OCR で元素名を読む（失敗したら空文字）
-                auto_name = ocr_eds_element_name(img_rgba)
-                # デフォルト表示名（stem から元素名っぽい部分を除去）
-                default_save = Path(key).stem
+        st.subheader("各マップの元素名設定")
+        st.caption("元素名を確認・編集 → 「ラベルを適用」で図内の左上テキストを更新します")
 
-                c0, c1, c2, c3 = st.columns([2, 2, 2, 1])
-                # プレビューはRGB変換して表示
-                preview = crop_eds_map(img_rgba)
-                c0.image(preview, use_column_width=True)
-                elem = c1.text_input("元素名", value=auto_name, key=f"eds_elem_{i}",
-                                     label_visibility="collapsed", placeholder="例: Al Kα1")
-                save_name = c2.text_input("保存名", value=default_save, key=f"eds_save_{i}",
-                                          label_visibility="collapsed")
-                use = c3.checkbox("", value=True, key=f"eds_use_{i}")
-                eds_entries.append((key, img_rgba, elem, save_name, use))
+        hc = st.columns([2, 2, 1])
+        hc[0].caption("プレビュー")
+        hc[1].caption("元素名（左上に表示）")
+        hc[2].caption("除外")
 
-            st.divider()
-            if st.button("✅ 処理してパネル配置に追加", type="primary", use_container_width=True):
-                added = 0
-                for key, img_rgba, elem, save_name, use in eds_entries:
-                    if not use:
-                        continue
-                    # クロップ処理
-                    result = crop_eds_map(img_rgba)
-                    # 元素名を左上に描画
-                    if elem.strip():
-                        _draw = ImageDraw.Draw(result)
-                        _font = load_font(eds_label_fs, bold=True)
-                        _draw.text((8, 4), elem.strip(), fill=eds_label_color, font=_font)
-                    # セッションに保存
-                    sk = (save_name.strip() or key) + "_eds.png"
-                    st.session_state.images[sk] = result
-                    added += 1
-                st.success(f"{added} 枚を処理しました → 「パネル配置」タブで配置できます")
-                st.session_state.eds_results = [
-                    (k, crop_eds_map(v)) for k, v, *_ in eds_entries
-                ]
+        eds_entries = []
+        for i, (key, img_rgba) in enumerate(st.session_state.eds_extracted.items()):
+            auto_name = st.session_state.eds_ocr_cache.get(key, "")
+            c0, c1, c2 = st.columns([2, 2, 1])
+            c0.image(st.session_state.images.get(key, crop_eds_map(img_rgba)), use_column_width=True)
+            elem = c1.text_input("元素名", value=auto_name, key=f"eds_elem_{i}",
+                                  label_visibility="collapsed", placeholder="例: Al")
+            remove = c2.checkbox("除外", value=False, key=f"eds_rm_{i}")
+            eds_entries.append((key, img_rgba, elem, remove))
 
-            # 処理済みプレビュー
-            if "eds_results" in st.session_state and st.session_state.eds_results:
-                st.subheader("処理結果プレビュー")
-                n = len(st.session_state.eds_results)
-                gcols = st.columns(min(n, 4))
-                for i, (name, img) in enumerate(st.session_state.eds_results):
-                    gcols[i % min(n, 4)].image(img, caption=name, use_column_width=True)
+        if st.button("🔤 ラベルを適用・更新", type="primary", use_container_width=True):
+            for key, img_rgba, elem, remove in eds_entries:
+                if remove:
+                    st.session_state.images.pop(key, None)
+                    continue
+                result = crop_eds_map(img_rgba)
+                if elem.strip():
+                    _draw = ImageDraw.Draw(result)
+                    _font = load_font(eds_label_fs, bold=True)
+                    _draw.text((8, 4), elem.strip(), fill=eds_label_color, font=_font)
+                st.session_state.images[key] = result
+            st.success("更新しました → 「パネル配置」タブで確認できます")
+            st.rerun()
 
 # ══════════════════════════════════════════════
 #  TAB 1 — Image Management

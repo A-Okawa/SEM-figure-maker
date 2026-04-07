@@ -415,9 +415,16 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
     bar = img_rgba.convert("RGBA").crop((0, y0, w, y1))
     bg = Image.new("RGB", bar.size, "white")
     bg.paste(bar.convert("RGB"), mask=bar.split()[3])
-    up = bg.resize((bg.width * 4, bg.height * 4), Image.LANCZOS)
+    up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)
     try:
         raw = pytesseract.image_to_string(up, config="--psm 7").strip()
+        # Fix common OCR mistakes with Greek letters
+        import re as _re
+        raw = _re.sub(r'K\s*a\s*l?\b', 'Kα1', raw)
+        raw = _re.sub(r'K\s*a\s*1\b', 'Kα1', raw)
+        raw = _re.sub(r'L\s*a\s*l?\b', 'Lα1', raw)
+        raw = _re.sub(r'L\s*a\s*1\b', 'Lα1', raw)
+        raw = _re.sub(r'M\s*a\s*l?\b', 'Mα1', raw)
         return raw
     except Exception:
         return ""
@@ -502,11 +509,15 @@ with tab_eds:
         eds_entries = []
         for i, (key, img_rgba) in enumerate(st.session_state.eds_extracted.items()):
             auto_name = st.session_state.eds_ocr_cache.get(key, "")
+            wkey = f"eds_elem_{key}"
+            # OCR結果をセッションに先書き（初回のみ）
+            if wkey not in st.session_state and auto_name:
+                st.session_state[wkey] = auto_name
             c0, c1, c2 = st.columns([2, 2, 1])
             c0.image(st.session_state.images.get(key, crop_eds_map(img_rgba)), use_column_width=True)
-            elem = c1.text_input("元素名", value=auto_name, key=f"eds_elem_{i}",
-                                  label_visibility="collapsed", placeholder="例: Al")
-            remove = c2.checkbox("除外", value=False, key=f"eds_rm_{i}")
+            elem = c1.text_input("元素名", key=wkey,
+                                  label_visibility="collapsed", placeholder="例: Al Kα1")
+            remove = c2.checkbox("除外", value=False, key=f"eds_rm_{key}")
             eds_entries.append((key, img_rgba, elem, remove))
 
         if st.button("🔤 ラベルを適用・更新", type="primary", use_container_width=True):
@@ -849,7 +860,7 @@ with tab3:
             lbl_color = c1.selectbox("ラベル色", ["白 (white)", "黒 (black)"], key="lbl_col")
             lbl_color_val = lbl_color.split("(")[1].rstrip(")")
             lbl_pos = c2.selectbox("ラベル位置", ["左上", "右上", "左下", "右下"])
-            lbl_fs = c3.slider("フォントサイズ", 12, 150, 80)
+            lbl_fs = c3.slider("フォントサイズ", 12, 150, 80, key="panel_lfs")
 
             st.divider()
             if st.button("📐 パネルを作成", type="primary", use_container_width=True):

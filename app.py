@@ -148,32 +148,38 @@ def detect_scale_bar_in_region(pil_img: Image.Image, roi_y_start: int) -> tuple 
 
 def detect_dark_scale_bar(pil_img: Image.Image) -> tuple | None:
     """
-    Detect a dark (black) horizontal scale bar embedded in the bottom-left area
-    of an EDS SEI image.
+    Detect a dark horizontal scale bar on the white info bar area
+    at the bottom of an Oxford EDS SEI image.
+    Strategy: find rows with very bright mean (white background), then find
+    the longest dark horizontal run within those rows.
     Returns (x_start, y_abs, bar_length_px) or None.
     """
     arr = np.array(pil_img.convert("L"))
     h, w = arr.shape
-    # Search bottom 40% of image, left 60% of width
-    roi_y = int(h * 0.60)
-    roi_x = int(w * 0.60)
-    roi = arr[roi_y:h, :roi_x]
 
-    # Threshold: dark pixels (< 50 out of 255)
-    binary_dark = (roi < 50).astype(np.uint8) * 255
+    # Search only bottom 30% of image
+    roi_y = int(h * 0.70)
+    roi = arr[roi_y:h, :]
+
+    # Find rows in the white area (mean > 180 = bright/white background)
+    row_means = roi.mean(axis=1)
+    white_rows = np.where(row_means > 180)[0]
+    if len(white_rows) == 0:
+        return None
 
     best_run_len = 0
-    best_row = -1
+    best_row_abs = -1
     best_x = 0
 
-    for y in range(binary_dark.shape[0]):
-        row = binary_dark[y]
-        padded = np.concatenate([[0], row, [0]])
-        is_dark = (padded == 255).astype(np.int8)
+    for y in white_rows:
+        row = roi[y]
+        # Dark pixels on white background: < 80
+        padded = np.concatenate([[255], row, [255]])
+        is_dark = (padded < 80).astype(np.int8)
         transitions = np.diff(is_dark)
         starts = np.where(transitions == 1)[0]
         ends = np.where(transitions == -1)[0]
-        if len(starts) == 0:
+        if len(starts) == 0 or len(ends) == 0:
             continue
         lengths = ends - starts
         max_idx = int(np.argmax(lengths))
@@ -181,11 +187,11 @@ def detect_dark_scale_bar(pil_img: Image.Image) -> tuple | None:
         max_x = int(starts[max_idx])
         if max_run > best_run_len and max_run > 15:
             best_run_len = max_run
-            best_row = y
+            best_row_abs = roi_y + y
             best_x = max_x
 
-    if best_run_len > 15 and best_row >= 0:
-        return (best_x, roi_y + best_row, best_run_len)
+    if best_run_len > 15 and best_row_abs >= 0:
+        return (best_x, best_row_abs, best_run_len)
     return None
 
 
@@ -617,11 +623,9 @@ with tab_eds:
         for i, (key, img_rgba) in enumerate(st.session_state.eds_extracted.items()):
             wkey = f"eds_elem_{key}"
             st.markdown(f"**画像 {i+1}**")
-            c0, c1, c2, c3 = st.columns([3, 2, 2, 1])
+            c0, c2, c3 = st.columns([3, 3, 1])
             c0.image(st.session_state.images.get(key, crop_eds_map(img_rgba)),
                      caption="マップ", use_column_width=True)
-            top_bar = get_eds_top_bar(img_rgba)
-            c1.image(top_bar, caption="元素ラベル（拡大）", use_column_width=True)
             elem = c2.text_input("元素記号", key=wkey,
                                   placeholder="例: O, Al, Mo, Na, SEI")
             remove = c3.checkbox("除外", value=False, key=f"eds_rm_{key}")
@@ -977,7 +981,7 @@ with tab3:
 
                 # SEI画像（1枚目）スケールバー設定
                 st.markdown("**SEI画像のスケールバー**")
-                add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=False)
+                add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=True)
                 if add_sei_scalebar:
                     # 1枚目の画像から黒スケールバーを自動検出
                     _default_barpx = 100

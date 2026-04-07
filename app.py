@@ -926,7 +926,7 @@ with tab3:
             st.subheader("パネルラベル")
             lbl_content = st.radio(
                 "ラベル内容",
-                ["サンプル名のみ", "文字のみ (a)(b)...", "両方"],
+                ["なし", "サンプル名のみ", "文字のみ (a)(b)...", "両方"],
                 index=0, horizontal=True,
             )
             label_style = "なし"
@@ -949,7 +949,9 @@ with tab3:
                 for idx, pname in enumerate(panel_names_list):
                     base = base_labels[idx] if idx < len(base_labels) else ""
                     sname = st.session_state.get(f"sname_{pname}", "").strip()
-                    if lbl_content == "サンプル名のみ":
+                    if lbl_content == "なし":
+                        result.append("")
+                    elif lbl_content == "サンプル名のみ":
                         result.append(sname)
                     elif lbl_content == "文字のみ (a)(b)...":
                         result.append(base)

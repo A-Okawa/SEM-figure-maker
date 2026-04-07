@@ -345,7 +345,7 @@ def extract_eds_maps_from_docx(docx_bytes: bytes) -> dict:
                         and n.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"))])
         for mname in media:
             data = z.read(mname)
-            img = Image.open(io.BytesIO(data))
+            img = Image.open(io.BytesIO(data)).copy()  # force-load into memory
             w, h = img.size
             if w >= 150 and h >= 150:   # exclude logos and tiny icons
                 all_imgs[mname] = img
@@ -835,23 +835,30 @@ with tab3:
 
             st.divider()
             st.subheader("レイアウト設定")
-            LAYOUTS = {
-                "1×1": (1,1), "1×2": (1,2), "2×1": (2,1),
-                "1×3": (1,3), "3×1": (3,1), "2×2": (2,2),
-                "2×3": (2,3), "3×2": (3,2), "3×3": (3,3),
-                "1×4": (1,4), "4×1": (4,1), "2×4": (2,4), "4×2": (4,2),
-            }
-            layout_key = st.selectbox("レイアウト (行 × 列)", list(LAYOUTS.keys()), index=5)
-            rows, cols = LAYOUTS[layout_key]
 
-            # Determine each panel size — preserve aspect ratio option
+            layout_mode = st.radio("モード", ["グリッド", "混在 (1枚 + グリッド)"], horizontal=True)
+
+            if layout_mode == "グリッド":
+                LAYOUTS = {
+                    "1×1": (1,1), "1×2": (1,2), "2×1": (2,1),
+                    "1×3": (1,3), "3×1": (3,1), "2×2": (2,2),
+                    "2×3": (2,3), "3×2": (3,2), "3×3": (3,3),
+                    "1×4": (1,4), "4×1": (4,1), "2×4": (2,4), "4×2": (4,2),
+                }
+                layout_key = st.selectbox("グリッド (行 × 列)", list(LAYOUTS.keys()), index=5)
+                rows, cols = LAYOUTS[layout_key]
+            else:
+                st.caption("1枚目 = 左の大きい画像 / 残り = 右のグリッド")
+                mix_right_rows = st.selectbox("右グリッド 行数", [1, 2, 3, 4], index=1)
+                mix_right_cols = st.selectbox("右グリッド 列数", [1, 2, 3, 4], index=1)
+                mix_left_pct  = st.slider("左の幅 (%)", 20, 80, 50)
+
             st.subheader("パネルサイズ")
             uniform_size = st.checkbox("全画像を正方形にリサイズ", value=False)
             panel_px = st.slider("各パネルの辺 (px)", 200, 1200, 500, step=50)
 
             st.subheader("余白・背景")
             spacing = st.slider("パネル間隔 (px)", 0, 80, 8)
-            outer_margin = 0
             bg_choice = st.selectbox("背景色", ["白 (white)", "黒 (black)", "グレー (gray)"])
             bg_val = bg_choice.split("(")[1].rstrip(")")
 
@@ -867,75 +874,111 @@ with tab3:
             lbl_pos = c2.selectbox("ラベル位置", ["左上", "右上", "左下", "右下"])
             lbl_fs = c3.slider("フォントサイズ", 12, 150, 80, key="panel_lfs")
 
-            st.divider()
-            if st.button("📐 パネルを作成", type="primary", use_container_width=True):
-                base_labels = make_label_list(label_style, n_imgs) if label_style != "なし" else [""] * n_imgs
-                labels = []
-                for idx, pname in enumerate(panel_names[:n_imgs]):
+            # ── ラベルテキスト生成 ──────────────────────
+            def build_labels(panel_names_list):
+                base_labels = make_label_list(label_style, len(panel_names_list)) if label_style != "なし" else [""] * len(panel_names_list)
+                result = []
+                for idx, pname in enumerate(panel_names_list):
                     base = base_labels[idx] if idx < len(base_labels) else ""
                     sname = st.session_state.get(f"sname_{pname}", "").strip()
                     if base and sname:
-                        labels.append(f"{base} {sname}")
+                        result.append(f"{base} {sname}")
                     elif sname:
-                        labels.append(sname)
+                        result.append(sname)
                     else:
-                        labels.append(base)
+                        result.append(base)
+                return result
+
+            def paste_with_label(canvas, draw, img, pw, ph, x0, y0, lbl, font_lbl):
+                resized = img.resize((pw, ph), Image.LANCZOS)
+                canvas.paste(resized, (x0, y0))
+                if lbl:
+                    lm = 8
+                    bbox = draw.textbbox((0, 0), lbl, font=font_lbl)
+                    lw, lh = bbox[2]-bbox[0], bbox[3]-bbox[1]
+                    if lbl_pos == "左上":
+                        lx, ly = x0 + lm, y0 + lm
+                    elif lbl_pos == "右上":
+                        lx, ly = x0 + pw - lw - lm, y0 + lm
+                    elif lbl_pos == "左下":
+                        lx, ly = x0 + lm, y0 + ph - lh - lm
+                    else:
+                        lx, ly = x0 + pw - lw - lm, y0 + ph - lh - lm
+                    draw.text((lx, ly), lbl, fill=lbl_color_val, font=font_lbl)
+
+            st.divider()
+            if st.button("📐 パネルを作成", type="primary", use_container_width=True):
                 font_lbl = load_font(lbl_fs, bold=True)
 
-                # Compute each panel dimensions
-                if uniform_size:
-                    panel_sizes = [(panel_px, panel_px)] * n_imgs
-                else:
-                    panel_sizes = []
-                    for img in panel_images:
-                        ow, oh = img.size
-                        aspect = ow / oh
-                        if aspect >= 1:
-                            pw, ph = panel_px, int(panel_px / aspect)
-                        else:
-                            pw, ph = int(panel_px * aspect), panel_px
-                        panel_sizes.append((pw, ph))
+                def img_size(img):
+                    ow, oh = img.size
+                    if uniform_size:
+                        return panel_px, panel_px
+                    aspect = ow / oh
+                    if aspect >= 1:
+                        return panel_px, int(panel_px / aspect)
+                    return int(panel_px * aspect), panel_px
 
-                # Uniform col/row sizes from max
-                col_w = max(s[0] for s in panel_sizes)
-                row_h = max(s[1] for s in panel_sizes)
+                if layout_mode == "グリッド":
+                    labels = build_labels(panel_names)
+                    panel_sizes = [img_size(img) for img in panel_images]
+                    col_w = max(s[0] for s in panel_sizes)
+                    row_h = max(s[1] for s in panel_sizes)
+                    canvas_w = cols * col_w + (cols - 1) * spacing
+                    canvas_h = rows * row_h + (rows - 1) * spacing
+                    canvas = Image.new("RGB", (canvas_w, canvas_h), bg_val)
+                    draw = ImageDraw.Draw(canvas)
+                    for idx, (img, (pw, ph)) in enumerate(zip(panel_images, panel_sizes)):
+                        if idx >= rows * cols:
+                            break
+                        r, c = idx // cols, idx % cols
+                        x0 = c * (col_w + spacing) + (col_w - pw) // 2
+                        y0 = r * (row_h + spacing) + (row_h - ph) // 2
+                        paste_with_label(canvas, draw, img, pw, ph, x0, y0,
+                                         labels[idx] if idx < len(labels) else "", font_lbl)
 
-                canvas_w = cols * col_w + (cols - 1) * spacing + 2 * outer_margin
-                canvas_h = rows * row_h + (rows - 1) * spacing + 2 * outer_margin
+                else:  # 混在レイアウト
+                    labels = build_labels(panel_names)
+                    main_img = panel_images[0]
+                    small_imgs = panel_images[1:]
+                    small_names = panel_names[1:]
+                    small_labels = labels[1:]
 
-                canvas = Image.new("RGB", (canvas_w, canvas_h), bg_val)
-                draw = ImageDraw.Draw(canvas)
+                    total_w = panel_px * 3  # 全体幅の基準
+                    left_w  = int(total_w * mix_left_pct / 100)
+                    right_w = total_w - left_w - spacing
 
-                for idx, (img, (pw, ph)) in enumerate(zip(panel_images, panel_sizes)):
-                    if idx >= rows * cols:
-                        break
-                    r = idx // cols
-                    c = idx % cols
-                    x0 = outer_margin + c * (col_w + spacing)
-                    y0 = outer_margin + r * (row_h + spacing)
+                    # 左: メイン画像をleft_w幅に収める
+                    mw, mh = main_img.size
+                    main_ph = int(left_w * mh / mw)
+                    total_h = main_ph
 
-                    resized = img.resize((pw, ph), Image.LANCZOS)
-                    # Center within cell
-                    ox = (col_w - pw) // 2
-                    oy = (row_h - ph) // 2
-                    canvas.paste(resized, (x0 + ox, y0 + oy))
+                    # 右: グリッド
+                    n_small = mix_right_rows * mix_right_cols
+                    cell_w = (right_w - (mix_right_cols - 1) * spacing) // mix_right_cols
+                    cell_h = (total_h - (mix_right_rows - 1) * spacing) // mix_right_rows
 
-                    # Label (draw if any text exists)
-                    lbl = labels[idx] if idx < len(labels) else ""
-                    if lbl:
-                        lm = 8
-                        bbox = draw.textbbox((0, 0), lbl, font=font_lbl)
-                        lw = bbox[2] - bbox[0]
-                        lh = bbox[3] - bbox[1]
-                        if lbl_pos == "左上":
-                            lx, ly = x0 + ox + lm, y0 + oy + lm
-                        elif lbl_pos == "右上":
-                            lx, ly = x0 + ox + pw - lw - lm, y0 + oy + lm
-                        elif lbl_pos == "左下":
-                            lx, ly = x0 + ox + lm, y0 + oy + ph - lh - lm
-                        else:
-                            lx, ly = x0 + ox + pw - lw - lm, y0 + oy + ph - lh - lm
-                        draw.text((lx, ly), lbl, fill=lbl_color_val, font=font_lbl)
+                    canvas = Image.new("RGB", (total_w, total_h), bg_val)
+                    draw = ImageDraw.Draw(canvas)
+
+                    # 左パネル
+                    paste_with_label(canvas, draw, main_img, left_w, main_ph,
+                                     0, 0, labels[0] if labels else "", font_lbl)
+
+                    # 右グリッド
+                    for si, (simg, slbl) in enumerate(zip(small_imgs[:n_small], small_labels[:n_small])):
+                        sr, sc = si // mix_right_cols, si % mix_right_cols
+                        sx = left_w + spacing + sc * (cell_w + spacing)
+                        sy = sr * (cell_h + spacing)
+                        # セルに収まるよう縮小
+                        sw_orig, sh_orig = simg.size
+                        scale = min(cell_w / sw_orig, cell_h / sh_orig)
+                        sw = int(sw_orig * scale)
+                        sh = int(sh_orig * scale)
+                        ox = (cell_w - sw) // 2
+                        oy = (cell_h - sh) // 2
+                        paste_with_label(canvas, draw, simg, sw, sh,
+                                         sx + ox, sy + oy, slbl, font_lbl)
 
                 st.session_state.panel_result = canvas
 

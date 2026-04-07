@@ -849,7 +849,7 @@ with tab3:
             lbl_color = c1.selectbox("ラベル色", ["白 (white)", "黒 (black)"], key="lbl_col")
             lbl_color_val = lbl_color.split("(")[1].rstrip(")")
             lbl_pos = c2.selectbox("ラベル位置", ["左上", "右上", "左下", "右下"])
-            lbl_fs = c3.slider("フォントサイズ", 12, 100, 28)
+            lbl_fs = c3.slider("フォントサイズ", 12, 150, 80)
 
             st.divider()
             if st.button("📐 パネルを作成", type="primary", use_container_width=True):

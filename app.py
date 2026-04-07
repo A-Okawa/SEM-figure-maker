@@ -981,27 +981,15 @@ with tab3:
 
                 # SEI画像（1枚目）スケールバー設定
                 st.markdown("**SEI画像のスケールバー**")
-                add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=True)
+                st.info("💡 スケールバー付きSEI画像を使うには：「スケールバー処理」タブでJEOL SEM画像を処理してから1枚目に選択してください。")
+                add_sei_scalebar = st.checkbox("1枚目にスケールバーを手動追加", value=False)
                 if add_sei_scalebar:
-                    # JEOL .txt からスケール自動読込
-                    sei_txt_file = st.file_uploader(
-                        "SEI画像に対応する JEOL .txt をアップロード（スケール自動読込）",
-                        type=["txt"], key="sei_txt_upload")
-                    _sei_barpx_default = 50
-                    _sei_barlbl_default = ""
-                    if sei_txt_file:
-                        _sei_meta = parse_jeol_txt(
-                            sei_txt_file.read().decode("utf-8", errors="ignore"))
-                        if _sei_meta.get("bar_px"):
-                            _sei_barpx_default = int(_sei_meta["bar_px"])
-                        if _sei_meta.get("bar_label"):
-                            _sei_barlbl_default = _sei_meta["bar_label"]
-                        st.caption(f"読込: {_sei_barpx_default} px / {_sei_barlbl_default}")
                     sb_c1, sb_c2, sb_c3, sb_c4 = st.columns(4)
-                    sei_bar_px  = sb_c1.number_input("スケールバー長さ (px)", min_value=1,
-                                                      value=_sei_barpx_default, step=1)
-                    sei_bar_lbl = sb_c2.text_input("ラベル", value=_sei_barlbl_default,
-                                                   placeholder="例: 5 μm, 1 μm")
+                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1,
+                                                      value=100, step=1,
+                                                      help="Oxfordレポートのスケールバーを定規で測るか、倍率から計算")
+                    sei_bar_lbl = sb_c2.text_input("ラベル", value="",
+                                                   placeholder="例: 5 μm")
                     sei_bar_col = sb_c3.selectbox("色", ["white", "black"], key="sei_bar_col")
                     sei_bar_fs  = sb_c4.slider("フォント", 8, 80, 28, key="sei_bar_fs")
 

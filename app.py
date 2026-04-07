@@ -412,7 +412,9 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
         return ""
 
     y0, y1 = min(top_bar_rows), max(top_bar_rows) + 1
-    bar = img_rgba.convert("RGBA").crop((0, y0, w, y1))
+    # 元素記号は左端にあるため左半分だけ使用（Kα1などの殻表記を除外）
+    bar_w = max(1, w // 2)
+    bar = img_rgba.convert("RGBA").crop((0, y0, bar_w, y1))
     bg = Image.new("RGB", bar.size, "white")
     bg.paste(bar.convert("RGB"), mask=bar.split()[3])
     up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)

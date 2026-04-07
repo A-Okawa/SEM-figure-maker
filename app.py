@@ -448,6 +448,9 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
                 sym = sym[0]  # V/W → 補正失敗なので V or W として扱う
             if sym in _ELEMENTS:
                 return sym
+            # 2文字マッチが元素にない場合、1文字だけ試す（例: 'Ok'→'O'）
+            if len(sym) == 2 and sym[0] in _ELEMENTS:
+                return sym[0]
         return "SEI"
     except Exception:
         return "SEI"

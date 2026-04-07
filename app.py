@@ -405,23 +405,24 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
     alpha = arr[:, :, 3]
     rgb   = arr[:, :, :3]
 
-    # Top-bar rows: alpha > 0 but nearly black RGB (text rows)
-    top_bar_rows = [y for y in range(min(60, h))
-                    if alpha[y].max() > 0 and rgb[y].max() < 30]
+    # Top-bar rows: alpha > 0（色付き元素バーも含める）
+    top_bar_rows = [y for y in range(min(60, h)) if alpha[y].max() > 0]
     if not top_bar_rows:
         return ""
 
     y0, y1 = min(top_bar_rows), max(top_bar_rows) + 1
-    # 元素記号は左端にあるため左半分だけ使用（Kα1などの殻表記を除外）
-    bar_w = max(1, w // 2)
+    # 元素記号は左端にあるため左1/4だけ使用（Kα1・マッピング等の右側テキストを除外）
+    bar_w = max(1, w // 4)
     bar = img_rgba.convert("RGBA").crop((0, y0, bar_w, y1))
     bg = Image.new("RGB", bar.size, "white")
     bg.paste(bar.convert("RGB"), mask=bar.split()[3])
-    up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)
+    up = bg.resize((bg.width * 8, bg.height * 8), Image.LANCZOS)
     try:
         import re as _re
         cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         raw = pytesseract.image_to_string(up, config=cfg).strip()
+        # 空白で区切り先頭トークンのみ使用（例: "O Kal mapping" → "O"）
+        raw = raw.split()[0] if raw else ""
         # 先頭が小文字の場合（OCR誤認識）を大文字に補正
         if raw and raw[0].islower():
             raw = raw[0].upper() + raw[1:]

@@ -417,13 +417,26 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
     bg.paste(bar.convert("RGB"), mask=bar.split()[3])
     up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)
     try:
-        raw = pytesseract.image_to_string(up, config="--psm 7").strip()
         import re as _re
-        # 元素記号だけ抽出（先頭の1〜2文字の英字 = 元素記号）
-        m = _re.match(r'^([A-Z][a-z]?)', raw)
+        # 文字ホワイトリスト＋単語モードでOCR（英字のみに限定し誤認識を減らす）
+        cfg = "--psm 8 --oem 1 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        raw = pytesseract.image_to_string(up, config=cfg).strip()
+
+        # シャープニングして再試行（1回目が短すぎる場合）
+        if len(raw) < 1:
+            import cv2 as _cv2
+            arr_up = np.array(up)
+            kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
+            sharp = _cv2.filter2D(arr_up, -1, kernel)
+            raw = pytesseract.image_to_string(Image.fromarray(sharp), config=cfg).strip()
+
+        # 先頭の元素記号（大文字1文字 + 任意の小文字1文字）を抽出
+        m = _re.match(r'([A-Z][a-z]?)', raw)
         if m:
-            return m.group(1)   # e.g. "Al", "Mo", "Ti", "C", "O"
-        # 元素記号が取れなかった場合 → SEI（電子線像など）
+            sym = m.group(1)
+            # 既知の誤認識補正（M→V系は特に発生しやすい）
+            FIXES = {"Vo": "Mo", "Vо": "Mo", "Mg": "Mg", "Mn": "Mn"}
+            return FIXES.get(sym, sym)
         return "SEI"
     except Exception:
         return "SEI"
@@ -862,11 +875,18 @@ with tab3:
             bg_val = bg_choice.split("(")[1].rstrip(")")
 
             st.subheader("パネルラベル")
-            label_style = st.selectbox(
-                "文字ラベル",
-                ["なし", "(a), (b), (c)...", "(A), (B), (C)...", "a), b), c)...", "A), B), C)...", "1, 2, 3..."],
-                index=0,
+            lbl_content = st.radio(
+                "ラベル内容",
+                ["サンプル名のみ", "文字のみ (a)(b)...", "両方"],
+                index=0, horizontal=True,
             )
+            label_style = "なし"
+            if lbl_content in ("文字のみ (a)(b)...", "両方"):
+                label_style = st.selectbox(
+                    "文字スタイル",
+                    ["(a), (b), (c)...", "(A), (B), (C)...", "a), b), c)...", "A), B), C)...", "1, 2, 3..."],
+                    index=0,
+                )
             c1, c2, c3 = st.columns(3)
             lbl_color = c1.selectbox("ラベル色", ["白 (white)", "黒 (black)"], key="lbl_col")
             lbl_color_val = lbl_color.split("(")[1].rstrip(")")
@@ -880,12 +900,15 @@ with tab3:
                 for idx, pname in enumerate(panel_names_list):
                     base = base_labels[idx] if idx < len(base_labels) else ""
                     sname = st.session_state.get(f"sname_{pname}", "").strip()
-                    if base and sname:
-                        result.append(f"{base} {sname}")
-                    elif sname:
+                    if lbl_content == "サンプル名のみ":
                         result.append(sname)
-                    else:
+                    elif lbl_content == "文字のみ (a)(b)...":
                         result.append(base)
+                    else:  # 両方
+                        if base and sname:
+                            result.append(f"{base} {sname}")
+                        else:
+                            result.append(base or sname)
                 return result
 
             def paste_with_label(canvas, draw, img, pw, ph, x0, y0, lbl, font_lbl):

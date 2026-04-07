@@ -857,9 +857,8 @@ with tab3:
                 for i, name in enumerate(order):
                     thumb = st.session_state.images[name].copy()
                     thumb.thumbnail((100, 100))
-                    # EDS元素名があれば優先、なければファイル名から生成
-                    eds_elem = st.session_state.get(f"eds_elem_{name}", "").strip()
-                    default_sname = eds_elem if eds_elem else Path(name).stem.replace("_processed", "")
+                    # デフォルトのサンプル名はファイル名ベース（元素名は画像に焼き込み済みのため引き継がない）
+                    default_sname = Path(name).stem.replace("_processed", "")
                     # サンプル名をセッションに先書き（初回のみ）
                     if f"sname_{name}" not in st.session_state:
                         st.session_state[f"sname_{name}"] = default_sname

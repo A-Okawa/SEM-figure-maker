@@ -418,25 +418,33 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
     up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)
     try:
         import re as _re
-        # 文字ホワイトリスト＋単語モードでOCR（英字のみに限定し誤認識を減らす）
-        cfg = "--psm 8 --oem 1 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         raw = pytesseract.image_to_string(up, config=cfg).strip()
 
-        # シャープニングして再試行（1回目が短すぎる場合）
-        if len(raw) < 1:
-            import cv2 as _cv2
-            arr_up = np.array(up)
-            kernel = np.array([[0,-1,0],[-1,5,-1],[0,-1,0]])
-            sharp = _cv2.filter2D(arr_up, -1, kernel)
-            raw = pytesseract.image_to_string(Image.fromarray(sharp), config=cfg).strip()
+        # 既知の元素記号リスト
+        _ELEMENTS = {
+            'H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S',
+            'Cl','Ar','K','Ca','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn',
+            'Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr','Nb','Mo','Tc','Ru',
+            'Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce',
+            'Pr','Nd','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta',
+            'W','Re','Os','Ir','Pt','Au','Hg','Tl','Pb','Bi','Th','U',
+        }
 
-        # 先頭の元素記号（大文字1文字 + 任意の小文字1文字）を抽出
         m = _re.match(r'([A-Z][a-z]?)', raw)
         if m:
             sym = m.group(1)
-            # 既知の誤認識補正（M→V系は特に発生しやすい）
-            FIXES = {"Vo": "Mo", "Vо": "Mo", "Mg": "Mg", "Mn": "Mn"}
-            return FIXES.get(sym, sym)
+            # V/W は M の誤認識が多い → 後続の小文字と組み合わせて確認
+            if sym[0] in ('V', 'W'):
+                for ch in raw[1:6]:
+                    if ch.islower():
+                        candidate = 'M' + ch
+                        if candidate in _ELEMENTS:
+                            return candidate
+                # M単体の元素記号も候補（例: Mn, Mg は小文字が取れない場合）
+                sym = sym[0]  # V/W → 補正失敗なので V or W として扱う
+            if sym in _ELEMENTS:
+                return sym
         return "SEI"
     except Exception:
         return "SEI"

@@ -983,21 +983,27 @@ with tab3:
                 st.markdown("**SEI画像のスケールバー**")
                 add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=True)
                 if add_sei_scalebar:
-                    # 1枚目の画像から黒スケールバーを自動検出
-                    _default_barpx = 100
+                    # SEI画像左下プレビューを表示してユーザーが目視確認できるようにする
                     if panel_images:
-                        _detected = detect_dark_scale_bar(panel_images[0])
-                        if _detected:
-                            _default_barpx = _detected[2]
+                        _sei = panel_images[0]
+                        _sw, _sh = _sei.size
+                        # 左下 40%×30% を切り出して4倍拡大
+                        _crop_w = max(1, int(_sw * 0.4))
+                        _crop_h = max(1, int(_sh * 0.3))
+                        _sei_crop = _sei.crop((0, _sh - _crop_h, _crop_w, _sh))
+                        _sei_crop_up = _sei_crop.resize(
+                            (_sei_crop.width * 4, _sei_crop.height * 4), Image.NEAREST)
+                        st.image(_sei_crop_up,
+                                 caption="SEI画像 左下拡大（スケールバーを目視確認）",
+                                 use_column_width=False, width=400)
                     sb_c1, sb_c2, sb_c3, sb_c4 = st.columns(4)
-                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1,
-                                                      value=_default_barpx, step=1)
-                    sei_bar_lbl = sb_c2.text_input("ラベル", value="5 μm",
+                    sei_bar_px  = sb_c1.number_input("スケールバー長さ (px)", min_value=1,
+                                                      value=50, step=1,
+                                                      help="左下プレビューでバー線の幅をピクセルで数えて入力")
+                    sei_bar_lbl = sb_c2.text_input("ラベル", value="",
                                                    placeholder="例: 5 μm, 1 μm")
                     sei_bar_col = sb_c3.selectbox("色", ["white", "black"], key="sei_bar_col")
                     sei_bar_fs  = sb_c4.slider("フォント", 8, 80, 28, key="sei_bar_fs")
-                    if panel_images and detect_dark_scale_bar(panel_images[0]):
-                        st.caption(f"自動検出: バー長さ = {_default_barpx} px")
 
             st.subheader("パネルサイズ")
             uniform_size = st.checkbox("全画像を正方形にリサイズ", value=False)

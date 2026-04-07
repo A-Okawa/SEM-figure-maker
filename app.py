@@ -358,6 +358,40 @@ with tab1:
             st.session_state.images[f.name] = img
         st.success(f"{len(st.session_state.images)} 枚の画像を保持中")
 
+    st.divider()
+    st.subheader("EDS レポート (.docx) から画像を抽出")
+    st.caption("JEOLのEDSレポートdocxをアップロードすると、埋め込み画像を取り出してパネル配置に使えます")
+
+    docx_files = st.file_uploader(
+        "docxファイルをアップロード（複数可）",
+        type=["docx"],
+        accept_multiple_files=True,
+        key="docx_upload",
+    )
+
+    if docx_files:
+        import zipfile as _zf
+        added = 0
+        for df in docx_files:
+            stem = Path(df.name).stem
+            df_bytes = df.read()
+            try:
+                with _zf.ZipFile(io.BytesIO(df_bytes)) as z:
+                    media = sorted([n for n in z.namelist()
+                                    if n.startswith("word/media/")
+                                    and n.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"))])
+                    for i, mname in enumerate(media):
+                        img_bytes = z.read(mname)
+                        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                        ext = Path(mname).suffix
+                        key = f"{stem}_img{i+1}{ext}"
+                        st.session_state.images[key] = img
+                        added += 1
+            except Exception as e:
+                st.warning(f"{df.name}: 読み込みエラー ({e})")
+        if added:
+            st.success(f"{added} 枚の画像を抽出しました → 「パネル配置」タブで使用できます")
+
     if st.session_state.images:
         if st.button("全画像をクリア"):
             st.session_state.images = {}

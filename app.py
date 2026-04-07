@@ -561,7 +561,7 @@ with tab_eds:
 
         # ── 共通設定 ─────────────────────────────
         with st.expander("ラベル設定"):
-            eds_label_fs    = st.slider("元素ラベル フォントサイズ", 8, 120, 80, key="eds_lfs")
+            eds_label_fs    = st.slider("元素ラベル フォントサイズ", 8, 120, 36, key="eds_lfs")
             eds_label_color = st.selectbox("元素ラベル 色", ["white", "black", "yellow"], key="eds_lcol")
 
         st.subheader("各マップの元素名設定")
@@ -908,10 +908,27 @@ with tab3:
                 layout_key = st.selectbox("グリッド (行 × 列)", list(LAYOUTS.keys()), index=5)
                 rows, cols = LAYOUTS[layout_key]
             else:
-                st.caption("1枚目 = 左の大きい画像 / 残り = 右のグリッド")
-                mix_right_rows = st.selectbox("右グリッド 行数", [1, 2, 3, 4], index=1)
-                mix_right_cols = st.selectbox("右グリッド 列数", [1, 2, 3, 4], index=1)
-                mix_left_pct  = st.slider("左の幅 (%)", 20, 80, 50)
+                mix_direction = st.radio("配置方向", ["左右 (1枚左 + グリッド右)", "上下 (1枚上 + グリッド下)"], horizontal=True)
+                if mix_direction.startswith("左右"):
+                    st.caption("1枚目 = 左の大きい画像 / 残り = 右のグリッド")
+                    mix_right_rows = st.selectbox("右グリッド 行数", [1, 2, 3, 4], index=1)
+                    mix_right_cols = st.selectbox("右グリッド 列数", [1, 2, 3, 4], index=1)
+                    mix_left_pct  = st.slider("左の幅 (%)", 20, 80, 50)
+                else:
+                    st.caption("1枚目 = 上の大きい画像 / 残り = 下のグリッド")
+                    mix_right_rows = st.selectbox("下グリッド 行数", [1, 2, 3, 4], index=1)
+                    mix_right_cols = st.selectbox("下グリッド 列数", [1, 2, 3, 4], index=1)
+                    mix_top_pct   = st.slider("上の高さ (%)", 20, 80, 50)
+
+                # SEI画像（1枚目）スケールバー設定
+                st.markdown("**SEI画像のスケールバー**")
+                add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=False)
+                if add_sei_scalebar:
+                    sb_c1, sb_c2, sb_c3, sb_c4 = st.columns(4)
+                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1, value=100, step=1)
+                    sei_bar_lbl = sb_c2.text_input("ラベル", value="5 μm")
+                    sei_bar_col = sb_c3.selectbox("色", ["white", "black"], key="sei_bar_col")
+                    sei_bar_fs  = sb_c4.slider("フォント", 8, 80, 28, key="sei_bar_fs")
 
             st.subheader("パネルサイズ")
             uniform_size = st.checkbox("全画像を正方形にリサイズ", value=False)
@@ -1013,44 +1030,76 @@ with tab3:
                     labels = build_labels(panel_names)
                     main_img = panel_images[0]
                     small_imgs = panel_images[1:]
-                    small_names = panel_names[1:]
                     small_labels = labels[1:]
-
-                    total_w = panel_px * 3  # 全体幅の基準
-                    left_w  = int(total_w * mix_left_pct / 100)
-                    right_w = total_w - left_w - spacing
-
-                    # 左: メイン画像をleft_w幅に収める
-                    mw, mh = main_img.size
-                    main_ph = int(left_w * mh / mw)
-                    total_h = main_ph
-
-                    # 右: グリッド
                     n_small = mix_right_rows * mix_right_cols
-                    cell_w = (right_w - (mix_right_cols - 1) * spacing) // mix_right_cols
-                    cell_h = (total_h - (mix_right_rows - 1) * spacing) // mix_right_rows
 
-                    canvas = Image.new("RGB", (total_w, total_h), bg_val)
-                    draw = ImageDraw.Draw(canvas)
+                    # SEIスケールバー適用
+                    if add_sei_scalebar and sei_bar_lbl.strip():
+                        main_img = draw_clean_scalebar(
+                            main_img, int(sei_bar_px), sei_bar_lbl.strip(),
+                            position="左下", color=sei_bar_col,
+                            bar_thickness=12, font_size=sei_bar_fs,
+                        )
 
-                    # 左パネル
-                    paste_with_label(canvas, draw, main_img, left_w, main_ph,
-                                     0, 0, labels[0] if labels else "", font_lbl)
+                    if mix_direction.startswith("左右"):
+                        total_w = panel_px * 3
+                        left_w  = int(total_w * mix_left_pct / 100)
+                        right_w = total_w - left_w - spacing
 
-                    # 右グリッド
-                    for si, (simg, slbl) in enumerate(zip(small_imgs[:n_small], small_labels[:n_small])):
-                        sr, sc = si // mix_right_cols, si % mix_right_cols
-                        sx = left_w + spacing + sc * (cell_w + spacing)
-                        sy = sr * (cell_h + spacing)
-                        # セルに収まるよう縮小
-                        sw_orig, sh_orig = simg.size
-                        scale = min(cell_w / sw_orig, cell_h / sh_orig)
-                        sw = int(sw_orig * scale)
-                        sh = int(sh_orig * scale)
-                        ox = (cell_w - sw) // 2
-                        oy = (cell_h - sh) // 2
-                        paste_with_label(canvas, draw, simg, sw, sh,
-                                         sx + ox, sy + oy, slbl, font_lbl)
+                        mw, mh = main_img.size
+                        main_ph = int(left_w * mh / mw)
+                        total_h = main_ph
+
+                        cell_w = (right_w - (mix_right_cols - 1) * spacing) // mix_right_cols
+                        cell_h = (total_h - (mix_right_rows - 1) * spacing) // mix_right_rows
+
+                        canvas = Image.new("RGB", (total_w, total_h), bg_val)
+                        draw = ImageDraw.Draw(canvas)
+
+                        paste_with_label(canvas, draw, main_img, left_w, main_ph,
+                                         0, 0, labels[0] if labels else "", font_lbl)
+
+                        for si, (simg, slbl) in enumerate(zip(small_imgs[:n_small], small_labels[:n_small])):
+                            sr, sc = si // mix_right_cols, si % mix_right_cols
+                            sx = left_w + spacing + sc * (cell_w + spacing)
+                            sy = sr * (cell_h + spacing)
+                            sw_orig, sh_orig = simg.size
+                            scale = min(cell_w / sw_orig, cell_h / sh_orig)
+                            sw, sh = int(sw_orig * scale), int(sh_orig * scale)
+                            ox, oy = (cell_w - sw) // 2, (cell_h - sh) // 2
+                            paste_with_label(canvas, draw, simg, sw, sh,
+                                             sx + ox, sy + oy, slbl, font_lbl)
+
+                    else:  # 上下
+                        total_h = panel_px * 3
+                        top_h   = int(total_h * mix_top_pct / 100)
+                        bot_h   = total_h - top_h - spacing
+
+                        mw, mh = main_img.size
+                        main_pw = int(top_h * mw / mh)
+                        total_w = max(main_pw,
+                                      panel_px * mix_right_cols + spacing * (mix_right_cols - 1))
+
+                        cell_w = (total_w - (mix_right_cols - 1) * spacing) // mix_right_cols
+                        cell_h = (bot_h - (mix_right_rows - 1) * spacing) // mix_right_rows
+
+                        canvas = Image.new("RGB", (total_w, total_h), bg_val)
+                        draw = ImageDraw.Draw(canvas)
+
+                        paste_with_label(canvas, draw, main_img, main_pw, top_h,
+                                         (total_w - main_pw) // 2, 0,
+                                         labels[0] if labels else "", font_lbl)
+
+                        for si, (simg, slbl) in enumerate(zip(small_imgs[:n_small], small_labels[:n_small])):
+                            sr, sc = si // mix_right_cols, si % mix_right_cols
+                            sx = sc * (cell_w + spacing)
+                            sy = top_h + spacing + sr * (cell_h + spacing)
+                            sw_orig, sh_orig = simg.size
+                            scale = min(cell_w / sw_orig, cell_h / sh_orig)
+                            sw, sh = int(sw_orig * scale), int(sh_orig * scale)
+                            ox, oy = (cell_w - sw) // 2, (cell_h - sh) // 2
+                            paste_with_label(canvas, draw, simg, sw, sh,
+                                             sx + ox, sy + oy, slbl, font_lbl)
 
                 st.session_state.panel_result = canvas
 

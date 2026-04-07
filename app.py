@@ -462,14 +462,17 @@ def crop_eds_map(img: Image.Image) -> Image.Image:
             map_start = y
             break
 
-    rows_ok = np.where(row_max_alpha > 0)[0]
-    cols_ok = np.where(col_max_alpha > 0)[0]
-    if len(rows_ok) == 0 or len(cols_ok) == 0:
+    col_max_rgb  = rgb.max(axis=(0, 2))
+
+    # Use colored rows/cols (alpha>0 AND rgb>10) to exclude black padding
+    rows_colored = np.where((row_max_alpha > 0) & (row_max_rgb > 10))[0]
+    cols_colored = np.where((col_max_alpha > 0) & (col_max_rgb > 10))[0]
+    if len(rows_colored) == 0 or len(cols_colored) == 0:
         return img.convert("RGB")
 
-    bottom = int(rows_ok[-1]) + 1
-    left   = int(cols_ok[0])
-    right  = int(cols_ok[-1]) + 1
+    bottom = int(rows_colored[-1]) + 1
+    left   = int(cols_colored[0])
+    right  = int(cols_colored[-1]) + 1
 
     cropped = rgba.crop((left, map_start, right, bottom))
     bg = Image.new("RGB", cropped.size, (0, 0, 0))
@@ -736,6 +739,7 @@ with tab2:
 
                 # 2. Determine bar width (txt優先 → 画像検出フォールバック)
                 search_from = dy if dy < ih else int(ih * 0.85)
+                _saved_bw = None  # メタデータ保存用
                 if extract_orig:
                     bw = None
                     if txt_bar_px:
@@ -744,6 +748,7 @@ with tab2:
                         br = detect_scale_bar_in_region(img, search_from)
                         if br:
                             bw = br[2] - br[0]
+                    _saved_bw = bw
                     if bw:
                         rw, rh = result.size
                         # 参照コード準拠: 右から60px・下から45px
@@ -771,6 +776,13 @@ with tab2:
 
                 save_name = f"{Path(img_name).stem}_processed.png"
                 st.session_state.images[save_name] = result.copy()
+                # スケールバー情報をパネル配置で参照できるよう保存
+                if "image_meta" not in st.session_state:
+                    st.session_state.image_meta = {}
+                st.session_state.image_meta[save_name] = {
+                    "bar_px": _saved_bw,
+                    "bar_label": scale_label,
+                }
                 results.append((save_name, result))
 
             st.session_state.sb_results = results
@@ -924,9 +936,15 @@ with tab3:
                 st.markdown("**SEI画像のスケールバー**")
                 add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=False)
                 if add_sei_scalebar:
+                    # 1枚目のメタデータから自動参照
+                    _first_meta = {}
+                    if panel_names:
+                        _first_meta = st.session_state.get("image_meta", {}).get(panel_names[0], {})
+                    _default_barpx = int(_first_meta.get("bar_px") or 100)
+                    _default_barlbl = _first_meta.get("bar_label") or "5 μm"
                     sb_c1, sb_c2, sb_c3, sb_c4 = st.columns(4)
-                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1, value=100, step=1)
-                    sei_bar_lbl = sb_c2.text_input("ラベル", value="5 μm")
+                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1, value=_default_barpx, step=1)
+                    sei_bar_lbl = sb_c2.text_input("ラベル", value=_default_barlbl)
                     sei_bar_col = sb_c3.selectbox("色", ["white", "black"], key="sei_bar_col")
                     sei_bar_fs  = sb_c4.slider("フォント", 8, 80, 28, key="sei_bar_fs")
 

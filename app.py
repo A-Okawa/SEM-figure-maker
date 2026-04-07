@@ -488,7 +488,7 @@ with tab_eds:
 
         # ── 共通設定 ─────────────────────────────
         with st.expander("ラベル設定"):
-            eds_label_fs    = st.slider("元素ラベル フォントサイズ", 8, 60, 22, key="eds_lfs")
+            eds_label_fs    = st.slider("元素ラベル フォントサイズ", 8, 120, 80, key="eds_lfs")
             eds_label_color = st.selectbox("元素ラベル 色", ["white", "black", "yellow"], key="eds_lcol")
 
         st.subheader("各マップの元素名設定")
@@ -748,7 +748,7 @@ with tab3:
             others    = [n for n in avail if "_processed" not in n]
 
             # ── チェックボックスで選択 ────────────────
-            st.caption("使用する画像にチェック（デフォルト：加工済みのみ）")
+            st.caption("使用する画像にチェック")
             checked = {}
             if processed:
                 st.markdown("**加工済み**")
@@ -757,7 +757,7 @@ with tab3:
             if others:
                 st.markdown("**その他**")
                 for name in others:
-                    checked[name] = st.checkbox(Path(name).stem, value=False, key=f"chk_{name}")
+                    checked[name] = st.checkbox(Path(name).stem, value=True, key=f"chk_{name}")
 
             selected = [n for n in avail if checked.get(n)]
 
@@ -841,16 +841,15 @@ with tab3:
 
             st.subheader("パネルラベル")
             label_style = st.selectbox(
-                "ラベルスタイル",
-                ["(a), (b), (c)...", "(A), (B), (C)...", "a), b), c)...", "A), B), C)...", "1, 2, 3...", "なし"],
+                "文字ラベル",
+                ["なし", "(a), (b), (c)...", "(A), (B), (C)...", "a), b), c)...", "A), B), C)...", "1, 2, 3..."],
                 index=0,
             )
-            if label_style != "なし":
-                c1, c2, c3 = st.columns(3)
-                lbl_color = c1.selectbox("ラベル色", ["白 (white)", "黒 (black)"], key="lbl_col")
-                lbl_color_val = lbl_color.split("(")[1].rstrip(")")
-                lbl_pos = c2.selectbox("ラベル位置", ["左上", "右上", "左下", "右下"])
-                lbl_fs = c3.slider("フォントサイズ", 12, 100, 28)
+            c1, c2, c3 = st.columns(3)
+            lbl_color = c1.selectbox("ラベル色", ["白 (white)", "黒 (black)"], key="lbl_col")
+            lbl_color_val = lbl_color.split("(")[1].rstrip(")")
+            lbl_pos = c2.selectbox("ラベル位置", ["左上", "右上", "左下", "右下"])
+            lbl_fs = c3.slider("フォントサイズ", 12, 100, 28)
 
             st.divider()
             if st.button("📐 パネルを作成", type="primary", use_container_width=True):
@@ -865,7 +864,7 @@ with tab3:
                         labels.append(sname)
                     else:
                         labels.append(base)
-                font_lbl = load_font(lbl_fs if label_style != "なし" else 24, bold=True)
+                font_lbl = load_font(lbl_fs, bold=True)
 
                 # Compute each panel dimensions
                 if uniform_size:
@@ -905,9 +904,9 @@ with tab3:
                     oy = (row_h - ph) // 2
                     canvas.paste(resized, (x0 + ox, y0 + oy))
 
-                    # Label
-                    if label_style != "なし":
-                        lbl = labels[idx]
+                    # Label (draw if any text exists)
+                    lbl = labels[idx] if idx < len(labels) else ""
+                    if lbl:
                         lm = 8
                         bbox = draw.textbbox((0, 0), lbl, font=font_lbl)
                         lw = bbox[2] - bbox[0]

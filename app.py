@@ -477,64 +477,22 @@ def crop_eds_map(img: Image.Image) -> Image.Image:
     return bg
 
 
-def ocr_eds_element_name(img_rgba: Image.Image) -> str:
+def get_eds_top_bar(img_rgba: Image.Image) -> Image.Image:
     """
-    OCR element name from Oxford EDS top bar.
-    Uses max-channel projection + invert to handle colored text on dark background.
+    Return the top bar region of an Oxford EDS image (element name label area).
+    Composited on black background, scaled up 4x for readability.
     """
-    try:
-        import pytesseract
-        import re as _re
-        from PIL import ImageOps
-    except ImportError:
-        return "SEI"
-
-    try:
-        arr = np.array(img_rgba.convert("RGBA"))
-        h, w = arr.shape[:2]
-        alpha = arr[:, :, 3]
-
-        # Find top bar rows (any visible content in top 80px)
-        bar_rows = [y for y in range(min(80, h)) if alpha[y].max() > 0]
-        if not bar_rows:
-            return "SEI"
-
-        y0, y1 = min(bar_rows), max(bar_rows) + 1
-        bar_rgba = img_rgba.convert("RGBA").crop((0, y0, w, y1))
-
-        # Composite on black to keep original colors
-        bg_black = Image.new("RGB", bar_rgba.size, (0, 0, 0))
-        bg_black.paste(bar_rgba.convert("RGB"), mask=bar_rgba.split()[3])
-
-        # Max channel projection: colored/white text on black → bright; background → dark
-        arr_rgb = np.array(bg_black)
-        max_ch = arr_rgb.max(axis=2).astype(np.uint8)
-
-        # Invert → dark text on white (tesseract-friendly)
-        bar_proc = ImageOps.invert(Image.fromarray(max_ch))
-
-        # Scale up so text height is ~150px
-        scale = max(6, 150 // max(1, y1 - y0))
-        up = bar_proc.resize((bar_proc.width * scale, bar_proc.height * scale), Image.LANCZOS)
-
-        cfg = "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        raw = pytesseract.image_to_string(up, config=cfg).strip()
-
-        # Find first valid element symbol in all tokens
-        for token in raw.split():
-            if token and token[0].islower():
-                token = token[0].upper() + token[1:]
-            m = _re.match(r'([A-Z][a-z]?)', token)
-            if m:
-                sym = m.group(1)
-                if sym in _ELEMENTS:
-                    return sym
-                if len(sym) == 2 and sym[0] in _ELEMENTS:
-                    return sym[0]
-
-        return "SEI"
-    except Exception:
-        return "SEI"
+    arr = np.array(img_rgba.convert("RGBA"))
+    h, w = arr.shape[:2]
+    alpha = arr[:, :, 3]
+    bar_rows = [y for y in range(min(80, h)) if alpha[y].max() > 0]
+    if not bar_rows:
+        return Image.new("RGB", (w, 20), (0, 0, 0))
+    y0, y1 = min(bar_rows), max(bar_rows) + 1
+    bar_rgba = img_rgba.convert("RGBA").crop((0, y0, w, y1))
+    bg = Image.new("RGB", bar_rgba.size, (0, 0, 0))
+    bg.paste(bar_rgba.convert("RGB"), mask=bar_rgba.split()[3])
+    return bg.resize((bg.width * 3, bg.height * 3), Image.NEAREST)
 
 
 # ─────────────────────────────────────────────
@@ -579,12 +537,9 @@ with tab_eds:
                     key = f"{stem}_map{i+1}{ext}"
                     if key not in st.session_state.eds_extracted:
                         st.session_state.eds_extracted[key] = img
-                        # XMLテキストから元素名を取得、なければOCRフォールバック
+                        # 元素名はユーザーが手動入力（自動認識なし）
                         label_text = xml_labels.get(mname, "")
-                        if label_text:
-                            st.session_state.eds_ocr_cache[key] = parse_element_from_label(label_text)
-                        else:
-                            st.session_state.eds_ocr_cache[key] = ocr_eds_element_name(img)
+                        st.session_state.eds_ocr_cache[key] = parse_element_from_label(label_text) if label_text else ""
                         # クロップ済み画像をパネル配置に即追加
                         cropped = crop_eds_map(img)
                         st.session_state.images[key] = cropped
@@ -610,25 +565,20 @@ with tab_eds:
             eds_label_color = st.selectbox("元素ラベル 色", ["white", "black", "yellow"], key="eds_lcol")
 
         st.subheader("各マップの元素名設定")
-        st.caption("元素名を確認・編集 → 「ラベルを適用」で図内の左上テキストを更新します")
-
-        hc = st.columns([2, 2, 1])
-        hc[0].caption("プレビュー")
-        hc[1].caption("元素名（左上に表示）")
-        hc[2].caption("除外")
+        st.caption("画像上部のラベルを確認して元素記号を入力 → 「ラベルを適用」で図内左上に追記されます")
 
         eds_entries = []
         for i, (key, img_rgba) in enumerate(st.session_state.eds_extracted.items()):
-            auto_name = st.session_state.eds_ocr_cache.get(key, "")
             wkey = f"eds_elem_{key}"
-            # OCR結果をセッションに先書き（初回のみ）
-            if wkey not in st.session_state and auto_name:
-                st.session_state[wkey] = auto_name
-            c0, c1, c2 = st.columns([2, 2, 1])
-            c0.image(st.session_state.images.get(key, crop_eds_map(img_rgba)), use_column_width=True)
-            elem = c1.text_input("元素名", key=wkey,
-                                  label_visibility="collapsed", placeholder="例: Al Kα1")
-            remove = c2.checkbox("除外", value=False, key=f"eds_rm_{key}")
+            st.markdown(f"**画像 {i+1}**")
+            c0, c1, c2, c3 = st.columns([3, 2, 2, 1])
+            c0.image(st.session_state.images.get(key, crop_eds_map(img_rgba)),
+                     caption="マップ", use_column_width=True)
+            top_bar = get_eds_top_bar(img_rgba)
+            c1.image(top_bar, caption="元素ラベル（拡大）", use_column_width=True)
+            elem = c2.text_input("元素記号", key=wkey,
+                                  placeholder="例: O, Al, Mo, Na, SEI")
+            remove = c3.checkbox("除外", value=False, key=f"eds_rm_{key}")
             eds_entries.append((key, img_rgba, elem, remove))
 
         if st.button("🔤 ラベルを適用・更新", type="primary", use_container_width=True):

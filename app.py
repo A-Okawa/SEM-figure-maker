@@ -330,26 +330,113 @@ def parse_jeol_txt(txt_content: str) -> dict:
     return result
 
 
-def extract_eds_maps_from_docx(docx_bytes: bytes) -> dict:
+def extract_eds_maps_from_docx(docx_bytes: bytes):
     """
-    Extract images from an Oxford EDS docx.
-    Excludes tiny images (logos etc.) by minimum size threshold.
-    Returns all images with both dimensions >= 150px.
-    key -> PIL Image (RGBA preserved)
+    Extract images and element labels from an Oxford EDS docx.
+    Labels are read from the XML text (e.g. 'O Kα1 マッピング') — no OCR needed.
+    Returns (images_dict, labels_dict):
+      images_dict: key -> PIL Image (RGBA preserved), only images >= 150px
+      labels_dict: key -> label text string (may be empty if not found)
     """
     import zipfile as _zf
+    import xml.etree.ElementTree as _ET
+    import re as _re
+
     all_imgs = {}
+    labels = {}
+
     with _zf.ZipFile(io.BytesIO(docx_bytes)) as z:
-        media = sorted([n for n in z.namelist()
+        namelist = z.namelist()
+
+        # Build rId -> media path from relationships file
+        rid_to_media = {}
+        rels_path = "word/_rels/document.xml.rels"
+        if rels_path in namelist:
+            rels_root = _ET.fromstring(z.read(rels_path))
+            for rel in rels_root:
+                rtype = rel.get("Type", "")
+                if "image" in rtype.lower():
+                    target = rel.get("Target", "").replace("../", "").lstrip("/")
+                    rid_to_media[rel.get("Id", "")] = "word/" + target
+
+        # Parse document XML as text — find text nodes and image rIds in order
+        media_to_label = {}
+        if "word/document.xml" in namelist:
+            doc_str = z.read("word/document.xml").decode("utf-8", errors="replace")
+            # Interleave text (<w:t>…</w:t>) and image refs (r:embed="rIdXX")
+            combined = []
+            for m in _re.finditer(
+                r'<w:t[^>]*>(.*?)</w:t>|r:embed="([^"]+)"', doc_str, _re.DOTALL
+            ):
+                if m.group(1) is not None:
+                    text = m.group(1).strip()
+                    if text:
+                        combined.append(("text", text))
+                elif m.group(2):
+                    combined.append(("img", m.group(2)))
+
+            # For each image, look back up to 10 items for the nearest text label
+            for i, (typ, val) in enumerate(combined):
+                if typ == "img" and val in rid_to_media:
+                    for j in range(i - 1, max(i - 10, -1), -1):
+                        if combined[j][0] == "text":
+                            media_to_label[rid_to_media[val]] = combined[j][1]
+                            break
+
+        # Extract images
+        media = sorted([n for n in namelist
                         if n.startswith("word/media/")
                         and n.lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"))])
         for mname in media:
             data = z.read(mname)
-            img = Image.open(io.BytesIO(data)).copy()  # force-load into memory
+            img = Image.open(io.BytesIO(data)).copy()
             w, h = img.size
-            if w >= 150 and h >= 150:   # exclude logos and tiny icons
+            if w >= 150 and h >= 150:
                 all_imgs[mname] = img
-    return all_imgs
+                labels[mname] = media_to_label.get(mname, "")
+
+    return all_imgs, labels
+
+
+_ELEMENTS = {
+    'H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S',
+    'Cl','Ar','K','Ca','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn',
+    'Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr','Nb','Mo','Tc','Ru',
+    'Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce',
+    'Pr','Nd','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta',
+    'W','Re','Os','Ir','Pt','Au','Hg','Tl','Pb','Bi','Th','U',
+}
+
+
+def parse_element_from_label(label_text: str) -> str:
+    """
+    Extract element symbol from an Oxford EDS label string.
+    e.g. 'O Kα1 マッピング' → 'O'
+         'Al Kα1 マッピング' → 'Al'
+         'SEI 画像' → 'SEI'
+    """
+    import re as _re
+    if not label_text:
+        return "SEI"
+    # Check each whitespace-delimited token in order
+    for token in label_text.split():
+        # Try 2-char then 1-char element symbol
+        m = _re.match(r'^([A-Z][a-z]?)$', token)
+        if m:
+            sym = m.group(1)
+            if sym in _ELEMENTS:
+                return sym
+            if len(sym) == 2 and sym[0] in _ELEMENTS:
+                return sym[0]
+        # Also accept tokens that START with element symbol (e.g. 'OKα1')
+        m2 = _re.match(r'([A-Z][a-z]?)', token)
+        if m2:
+            sym = m2.group(1)
+            if sym in _ELEMENTS:
+                return sym
+            if len(sym) == 2 and sym[0] in _ELEMENTS:
+                return sym[0]
+    return "SEI"
 
 
 def crop_eds_map(img: Image.Image) -> Image.Image:
@@ -390,73 +477,6 @@ def crop_eds_map(img: Image.Image) -> Image.Image:
     return bg
 
 
-def ocr_eds_element_name(img_rgba: Image.Image) -> str:
-    """
-    Try to read the element name (e.g. 'Al Kα1') from the top bar
-    of an Oxford EDS map.  Returns '' on failure.
-    """
-    try:
-        import pytesseract
-    except ImportError:
-        return ""
-
-    arr = np.array(img_rgba.convert("RGBA"))
-    h, w = arr.shape[:2]
-    alpha = arr[:, :, 3]
-    rgb   = arr[:, :, :3]
-
-    # Top-bar rows: alpha > 0（色付き元素バーも含める）
-    top_bar_rows = [y for y in range(min(60, h)) if alpha[y].max() > 0]
-    if not top_bar_rows:
-        return ""
-
-    y0, y1 = min(top_bar_rows), max(top_bar_rows) + 1
-    # 元素記号は左端にあるため左1/4だけ使用（Kα1・マッピング等の右側テキストを除外）
-    bar_w = max(1, w // 4)
-    bar = img_rgba.convert("RGBA").crop((0, y0, bar_w, y1))
-    bg = Image.new("RGB", bar.size, "white")
-    bg.paste(bar.convert("RGB"), mask=bar.split()[3])
-    up = bg.resize((bg.width * 8, bg.height * 8), Image.LANCZOS)
-    try:
-        import re as _re
-        cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        raw = pytesseract.image_to_string(up, config=cfg).strip()
-        # 空白で区切り先頭トークンのみ使用（例: "O Kal mapping" → "O"）
-        raw = raw.split()[0] if raw else ""
-        # 先頭が小文字の場合（OCR誤認識）を大文字に補正
-        if raw and raw[0].islower():
-            raw = raw[0].upper() + raw[1:]
-
-        # 既知の元素記号リスト
-        _ELEMENTS = {
-            'H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S',
-            'Cl','Ar','K','Ca','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn',
-            'Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr','Nb','Mo','Tc','Ru',
-            'Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce',
-            'Pr','Nd','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta',
-            'W','Re','Os','Ir','Pt','Au','Hg','Tl','Pb','Bi','Th','U',
-        }
-
-        m = _re.match(r'([A-Z][a-z]?)', raw)
-        if m:
-            sym = m.group(1)
-            # V/W は M の誤認識が多い → 後続の小文字と組み合わせて確認
-            if sym[0] in ('V', 'W'):
-                for ch in raw[1:6]:
-                    if ch.islower():
-                        candidate = 'M' + ch
-                        if candidate in _ELEMENTS:
-                            return candidate
-                # M単体の元素記号も候補（例: Mn, Mg は小文字が取れない場合）
-                sym = sym[0]  # V/W → 補正失敗なので V or W として扱う
-            if sym in _ELEMENTS:
-                return sym
-            # 2文字マッチが元素にない場合、1文字だけ試す（例: 'Ok'→'O'）
-            if len(sym) == 2 and sym[0] in _ELEMENTS:
-                return sym[0]
-        return "SEI"
-    except Exception:
-        return "SEI"
 
 
 # ─────────────────────────────────────────────
@@ -495,14 +515,15 @@ with tab_eds:
             stem = Path(df.name).stem
             df_bytes = df.read()
             try:
-                maps = extract_eds_maps_from_docx(df_bytes)
+                maps, xml_labels = extract_eds_maps_from_docx(df_bytes)
                 for i, (mname, img) in enumerate(maps.items()):
                     ext = Path(mname).suffix
                     key = f"{stem}_map{i+1}{ext}"
                     if key not in st.session_state.eds_extracted:
                         st.session_state.eds_extracted[key] = img
-                        # OCR を即時実行してキャッシュ
-                        st.session_state.eds_ocr_cache[key] = ocr_eds_element_name(img)
+                        # XMLテキストから元素名を取得（OCR不要）
+                        label_text = xml_labels.get(mname, "")
+                        st.session_state.eds_ocr_cache[key] = parse_element_from_label(label_text)
                         # クロップ済み画像をパネル配置に即追加
                         cropped = crop_eds_map(img)
                         st.session_state.images[key] = cropped

@@ -420,6 +420,9 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
         import re as _re
         cfg = "--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
         raw = pytesseract.image_to_string(up, config=cfg).strip()
+        # 先頭が小文字の場合（OCR誤認識）を大文字に補正
+        if raw and raw[0].islower():
+            raw = raw[0].upper() + raw[1:]
 
         # 既知の元素記号リスト
         _ELEMENTS = {

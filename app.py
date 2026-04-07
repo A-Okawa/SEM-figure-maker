@@ -418,16 +418,15 @@ def ocr_eds_element_name(img_rgba: Image.Image) -> str:
     up = bg.resize((bg.width * 6, bg.height * 6), Image.LANCZOS)
     try:
         raw = pytesseract.image_to_string(up, config="--psm 7").strip()
-        # Fix common OCR mistakes with Greek letters
         import re as _re
-        raw = _re.sub(r'K\s*a\s*l?\b', 'Kα1', raw)
-        raw = _re.sub(r'K\s*a\s*1\b', 'Kα1', raw)
-        raw = _re.sub(r'L\s*a\s*l?\b', 'Lα1', raw)
-        raw = _re.sub(r'L\s*a\s*1\b', 'Lα1', raw)
-        raw = _re.sub(r'M\s*a\s*l?\b', 'Mα1', raw)
-        return raw
+        # 元素記号だけ抽出（先頭の1〜2文字の英字 = 元素記号）
+        m = _re.match(r'^([A-Z][a-z]?)', raw)
+        if m:
+            return m.group(1)   # e.g. "Al", "Mo", "Ti", "C", "O"
+        # 元素記号が取れなかった場合 → SEI（電子線像など）
+        return "SEI"
     except Exception:
-        return ""
+        return "SEI"
 
 
 # ─────────────────────────────────────────────

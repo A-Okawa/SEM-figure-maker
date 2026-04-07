@@ -477,6 +477,64 @@ def crop_eds_map(img: Image.Image) -> Image.Image:
     return bg
 
 
+def ocr_eds_element_name(img_rgba: Image.Image) -> str:
+    """
+    OCR element name from Oxford EDS top bar.
+    Uses max-channel projection + invert to handle colored text on dark background.
+    """
+    try:
+        import pytesseract
+        import re as _re
+        from PIL import ImageOps
+    except ImportError:
+        return "SEI"
+
+    try:
+        arr = np.array(img_rgba.convert("RGBA"))
+        h, w = arr.shape[:2]
+        alpha = arr[:, :, 3]
+
+        # Find top bar rows (any visible content in top 80px)
+        bar_rows = [y for y in range(min(80, h)) if alpha[y].max() > 0]
+        if not bar_rows:
+            return "SEI"
+
+        y0, y1 = min(bar_rows), max(bar_rows) + 1
+        bar_rgba = img_rgba.convert("RGBA").crop((0, y0, w, y1))
+
+        # Composite on black to keep original colors
+        bg_black = Image.new("RGB", bar_rgba.size, (0, 0, 0))
+        bg_black.paste(bar_rgba.convert("RGB"), mask=bar_rgba.split()[3])
+
+        # Max channel projection: colored/white text on black → bright; background → dark
+        arr_rgb = np.array(bg_black)
+        max_ch = arr_rgb.max(axis=2).astype(np.uint8)
+
+        # Invert → dark text on white (tesseract-friendly)
+        bar_proc = ImageOps.invert(Image.fromarray(max_ch))
+
+        # Scale up so text height is ~150px
+        scale = max(6, 150 // max(1, y1 - y0))
+        up = bar_proc.resize((bar_proc.width * scale, bar_proc.height * scale), Image.LANCZOS)
+
+        cfg = "--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+        raw = pytesseract.image_to_string(up, config=cfg).strip()
+
+        # Find first valid element symbol in all tokens
+        for token in raw.split():
+            if token and token[0].islower():
+                token = token[0].upper() + token[1:]
+            m = _re.match(r'([A-Z][a-z]?)', token)
+            if m:
+                sym = m.group(1)
+                if sym in _ELEMENTS:
+                    return sym
+                if len(sym) == 2 and sym[0] in _ELEMENTS:
+                    return sym[0]
+
+        return "SEI"
+    except Exception:
+        return "SEI"
 
 
 # ─────────────────────────────────────────────
@@ -521,9 +579,12 @@ with tab_eds:
                     key = f"{stem}_map{i+1}{ext}"
                     if key not in st.session_state.eds_extracted:
                         st.session_state.eds_extracted[key] = img
-                        # XMLテキストから元素名を取得（OCR不要）
+                        # XMLテキストから元素名を取得、なければOCRフォールバック
                         label_text = xml_labels.get(mname, "")
-                        st.session_state.eds_ocr_cache[key] = parse_element_from_label(label_text)
+                        if label_text:
+                            st.session_state.eds_ocr_cache[key] = parse_element_from_label(label_text)
+                        else:
+                            st.session_state.eds_ocr_cache[key] = ocr_eds_element_name(img)
                         # クロップ済み画像をパネル配置に即追加
                         cropped = crop_eds_map(img)
                         st.session_state.images[key] = cropped

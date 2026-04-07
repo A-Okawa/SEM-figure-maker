@@ -146,6 +146,49 @@ def detect_scale_bar_in_region(pil_img: Image.Image, roi_y_start: int) -> tuple 
     return None
 
 
+def detect_dark_scale_bar(pil_img: Image.Image) -> tuple | None:
+    """
+    Detect a dark (black) horizontal scale bar embedded in the bottom-left area
+    of an EDS SEI image.
+    Returns (x_start, y_abs, bar_length_px) or None.
+    """
+    arr = np.array(pil_img.convert("L"))
+    h, w = arr.shape
+    # Search bottom 40% of image, left 60% of width
+    roi_y = int(h * 0.60)
+    roi_x = int(w * 0.60)
+    roi = arr[roi_y:h, :roi_x]
+
+    # Threshold: dark pixels (< 50 out of 255)
+    binary_dark = (roi < 50).astype(np.uint8) * 255
+
+    best_run_len = 0
+    best_row = -1
+    best_x = 0
+
+    for y in range(binary_dark.shape[0]):
+        row = binary_dark[y]
+        padded = np.concatenate([[0], row, [0]])
+        is_dark = (padded == 255).astype(np.int8)
+        transitions = np.diff(is_dark)
+        starts = np.where(transitions == 1)[0]
+        ends = np.where(transitions == -1)[0]
+        if len(starts) == 0:
+            continue
+        lengths = ends - starts
+        max_idx = int(np.argmax(lengths))
+        max_run = int(lengths[max_idx])
+        max_x = int(starts[max_idx])
+        if max_run > best_run_len and max_run > 15:
+            best_run_len = max_run
+            best_row = y
+            best_x = max_x
+
+    if best_run_len > 15 and best_row >= 0:
+        return (best_x, roi_y + best_row, best_run_len)
+    return None
+
+
 def ocr_scale_label_from_databar(pil_img: Image.Image, roi_y_start: int,
                                   bar_region: tuple | None = None) -> str | None:
     """
@@ -936,17 +979,21 @@ with tab3:
                 st.markdown("**SEI画像のスケールバー**")
                 add_sei_scalebar = st.checkbox("1枚目にスケールバーを追加", value=False)
                 if add_sei_scalebar:
-                    # 1枚目のメタデータから自動参照
-                    _first_meta = {}
-                    if panel_names:
-                        _first_meta = st.session_state.get("image_meta", {}).get(panel_names[0], {})
-                    _default_barpx = int(_first_meta.get("bar_px") or 100)
-                    _default_barlbl = _first_meta.get("bar_label") or "5 μm"
+                    # 1枚目の画像から黒スケールバーを自動検出
+                    _default_barpx = 100
+                    if panel_images:
+                        _detected = detect_dark_scale_bar(panel_images[0])
+                        if _detected:
+                            _default_barpx = _detected[2]
                     sb_c1, sb_c2, sb_c3, sb_c4 = st.columns(4)
-                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1, value=_default_barpx, step=1)
-                    sei_bar_lbl = sb_c2.text_input("ラベル", value=_default_barlbl)
+                    sei_bar_px  = sb_c1.number_input("バー長さ (px)", min_value=1,
+                                                      value=_default_barpx, step=1)
+                    sei_bar_lbl = sb_c2.text_input("ラベル", value="5 μm",
+                                                   placeholder="例: 5 μm, 1 μm")
                     sei_bar_col = sb_c3.selectbox("色", ["white", "black"], key="sei_bar_col")
                     sei_bar_fs  = sb_c4.slider("フォント", 8, 80, 28, key="sei_bar_fs")
+                    if panel_images and detect_dark_scale_bar(panel_images[0]):
+                        st.caption(f"自動検出: バー長さ = {_default_barpx} px")
 
             st.subheader("パネルサイズ")
             uniform_size = st.checkbox("全画像を正方形にリサイズ", value=False)
